@@ -4,9 +4,11 @@
 
 ![moonshine](moonshine/images/cover.png)
 
-[discord](https://discord.gg/DPBtncwaEm)
+# 🌙 moonshine
 
----
+a fully opensource script for prison life
+
+## [💬 discord](https://discord.gg/DPBtncwaEm)
 
 ## 🎮 supported games
 | game name | place id | lines of code |
