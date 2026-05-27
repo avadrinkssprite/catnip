@@ -6,10 +6,6 @@
     example/documentation is at the bottom
 ]]
 
-if Library then
-    Library:Unload()
-end
-
 local LoadTick = os.clock()
 
 local Library do
@@ -836,8 +832,7 @@ local Library do
             self.Holder:Clean()
         end
 
-        Library = nil 
-        getgenv().Library = nil
+        Library = nil
 
         UserInputService.MouseIconEnabled = true
     end
@@ -6754,5 +6749,4 @@ local Library do
     end
 end
 
-getgenv().Library = Library
 return Library
