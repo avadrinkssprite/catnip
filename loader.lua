@@ -18,8 +18,6 @@ local Folders = {
 }
 
 local Assets = {
-    ["catnip/images/cover.png"]           = "catnip/images/embedcover.png",
-    ["catnip/images/embedcover.png"]      = "catnip/images/embedcover.png",
     ["catnip/images/paw.png"]           = "catnip/images/paw.png",
     ["catnip/images/W AZULA.png"]        = "catnip/images/W%20AZULA.png",
     ["catnip/txts/W AZULA.txt"]          = "catnip/txts/W%20AZULA.txt",
