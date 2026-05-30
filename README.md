@@ -4,7 +4,7 @@
 
 # 🌿 catnip
 
-a fully opensource script for prison life
+a fully opensource script
 
 ## [💬 discord](https://discord.gg/DPBtncwaEm)
 
