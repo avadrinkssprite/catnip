@@ -12,12 +12,12 @@ local Watermark = Library:Watermark("loading...")
 local KeybindList = Library:KeybindList()
 
 do
-    local CombatPage = Window:Page({Name = "Combat", SubPages = true})
+    local CombatPage = Window:Page({Name = "Combat", Columns = 2})
     local MovementPage = Window:Page({Name = "Movement", Columns = 2})
-    local VisualsPage = Window:Page({Name = "Visuals", SubPages = true})
-    local WorldPage = Window:Page({Name = "World", SubPages = true})
+    local VisualsPage = Window:Page({Name = "Visuals", Columns = 2})
+    local WorldPage = Window:Page({Name = "World", Columns = 2})
     local MiscPage = Window:Page({Name = "Misc", Columns = 2})
-    local BlatantPage = Window:Page({Name = "Blatant", Columns = 2})
+    local RagebotPage = Window:Page({Name = "Ragebot", Columns = 2})
     local PlayersPage = Window:Page({Name = "Players", Columns = 2})
     local SettingsPage = Library:CreateSettingsPage(Window, Watermark, KeybindList)
 
@@ -145,6 +145,7 @@ do
     -- Prison Life shared core (Vape parity)
     local PL = {
         Shoot = nil,
+        rawShoot = nil,
         Bullet = nil,
         Reload = nil,
         GunTracers = nil,
@@ -251,6 +252,7 @@ do
             local shootFn = connection.Function and debug.getupvalue(connection.Function, 2)
             if shootFn then
                 PL.Shoot = shootFn
+                PL.rawShoot = shootFn
                 PL.Reload = debug.getupvalue(shootFn, 2)
                 PL.Bullet = debug.getupvalue(shootFn, 16)
                 return PL.Bullet ~= nil
@@ -260,9 +262,22 @@ do
     end
 
     function PL.getGunData()
-        if PL.Shoot then
-            return debug.getupvalue(PL.Shoot, 10)
+        local fn = PL.rawShoot
+        if not fn then return nil end
+        local ok, data = pcall(debug.getupvalue, fn, 10)
+        if ok and type(data) == "table" and data.Range ~= nil then return data end
+        for i = 1, 40 do
+            ok, data = pcall(debug.getupvalue, fn, i)
+            if ok and type(data) == "table" and data.Range ~= nil and data.FireRate ~= nil then
+                return data
+            end
         end
+        return nil
+    end
+
+    function PL.getEquippedTool()
+        local character = LocalPlayer.Character
+        return character and character:FindFirstChildWhichIsA("Tool")
     end
 
     function PL.getMousePosition()
@@ -328,15 +343,19 @@ do
         local root = localCharacter:FindFirstChild("HumanoidRootPart")
         if not root then return nil end
 
-        if settings.RollChance and settings.AimRandom and settings.AimRandom:NextNumber(0, 100) > (settings.HitChance or 100) then
-            return nil
+        if settings.RollChance and settings.HitChance and settings.HitChance < 100 and settings.AimRandom then
+            if settings.AimRandom:NextInteger(1, 100) > settings.HitChance then
+                return nil
+            end
         end
 
         local boneName = "HumanoidRootPart"
-        if settings.HeadshotChance and settings.AimRandom then
-            boneName = settings.AimRandom:NextNumber(0, 100) < settings.HeadshotChance and "Head" or "HumanoidRootPart"
-        elseif settings.Bone then
+        if settings.Bone then
             boneName = settings.Bone
+        elseif settings.HeadshotChance and settings.HeadshotChance >= 100 then
+            boneName = "Head"
+        elseif settings.HeadshotChance and settings.AimRandom then
+            boneName = settings.AimRandom:NextInteger(1, 100) <= settings.HeadshotChance and "Head" or "HumanoidRootPart"
         end
 
         local aimRange = settings.Range or 150
@@ -537,7 +556,6 @@ do
     end)
 
     do
-        local GunModsSubPage = CombatPage:SubPage({Name = "Gun Mods", Columns = 2})
         local GunModState = {Enabled = false, NoSpread = false, FullAuto = false, FireRatePct = 100}
         local gunModOldData, gunModOldRef = {}, nil
         local gunModThread = nil
@@ -571,14 +589,19 @@ do
             end)
         end
 
-        local GunModSection = GunModsSubPage:Section({Name = "Gun Modifications", Side = 1})
+        local GunModSection = CombatPage:Section({Name = "Gun Modifications", Side = 2})
         GunModSection:Toggle({
             Name = "Enabled",
             Flag = "GunModificationsEnabled",
             Default = false,
             Callback = function(v)
                 GunModState.Enabled = v
-                if v then startGunModLoop() else restoreGunData() end
+                if v then
+                    if not PL.rawShoot then PL.resolveShoot() end
+                    startGunModLoop()
+                else
+                    restoreGunData()
+                end
             end
         })
         GunModSection:Slider({
@@ -597,13 +620,11 @@ do
     end
 
     do
-        local AimbotSubPage = CombatPage:SubPage({Name = "Aimbot", Columns = 2})
-
         do
-            local SilentAimSection = AimbotSubPage:Section({Name = "Silent Aim", Side = 1}) do
+            local SilentAimSection = CombatPage:Section({Name = "Silent Aim", Side = 1}) do
                 local SilentAimState = {
                     Enabled = false,
-                    AutoFire = false,
+                    Style = "Legit",
                     Triggerbot = false,
                     ArrestSafety = false,
                     FoVCircle = false,
@@ -626,7 +647,6 @@ do
                     Blacklist = {},
                 }
                 local aimRandom = Random.new()
-                local saAutofireThread = nil
 
                 local function getSAFilters()
                     local holdingTaser = false
@@ -650,26 +670,37 @@ do
                 end
 
                 local function saGetTarget(origin, rangeLimit, attackCheck, rollChance)
+                    local blatant = SilentAimState.Style == "Blatant"
                     return PLTargeting.getClosestPart({
                         Origin = origin,
                         Mode = SilentAimState.Mode,
                         Range = SilentAimState.Range,
                         RangeLimit = rangeLimit,
-                        HitChance = SilentAimState.HitChance,
-                        HeadshotChance = SilentAimState.HeadshotChance,
+                        HitChance = blatant and 100 or SilentAimState.HitChance,
+                        HeadshotChance = blatant and 100 or SilentAimState.HeadshotChance,
+                        Bone = blatant and "Head" or nil,
                         Wallbang = SilentAimState.Wallbang,
                         AttackCheck = attackCheck,
-                        RollChance = rollChance,
+                        RollChance = rollChance and not blatant,
                         AimRandom = aimRandom,
                         Filters = getSAFilters(),
                     })
                 end
 
+                SilentAimSection:Dropdown({
+                    Name = "Style",
+                    Flag = "SilentAimStyle",
+                    Default = "Legit",
+                    Multi = false,
+                    Items = {"Legit", "Blatant"},
+                    Callback = function(v) SilentAimState.Style = v end
+                })
+
                 SilentAimSection:Toggle({
                     Name = "Enabled",
                     ToolTip = {
                         Name = "Silent Aim",
-                        Description = "Hooks Prison Life bullets toward the closest valid target (Vape-style)"
+                        Description = "Legit: hit/headshot chance rolls can miss (Vape). Blatant: always redirects to head."
                     },
                     Flag = "SilentAimEnabled",
                     Default = SilentAimState.Enabled,
@@ -677,7 +708,6 @@ do
                         SilentAimState.Enabled = v
                         if not v then
                             PL.removeBulletHandler("SilentAim")
-                            if saAutofireThread then task.cancel(saAutofireThread) saAutofireThread = nil end
                             return
                         end
                         PL.addBulletHandler("SilentAim", function(args)
@@ -700,36 +730,6 @@ do
                                 args[1] = newOrigin
                             end
                         end, 1)
-                    end
-                })
-
-                SilentAimSection:Toggle({
-                    Name = "AutoFire",
-                    Flag = "SilentAimAutoFire",
-                    Default = false,
-                    Callback = function(v)
-                        SilentAimState.AutoFire = v
-                        if saAutofireThread then task.cancel(saAutofireThread) saAutofireThread = nil end
-                        if not v then return end
-                        saAutofireThread = task.spawn(function()
-                            while SilentAimState.AutoFire do
-                                if SilentAimState.Enabled and PL.Shoot then
-                                    local tool = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildWhichIsA("Tool")
-                                    local gunData = PL.getGunData()
-                                    if gunData and tool and (tool:GetAttribute("Local_CurrentAmmo") or 0) > 0 and not tool:GetAttribute("Local_IsShooting") then
-                                        local head = LocalPlayer.Character:FindFirstChild("Head")
-                                        local origin = head and head.Position or Vector3.zero
-                                        local hit = saGetTarget(origin, gunData.Range or 1000, gunData.Behavior ~= "Taser", false)
-                                        if hit and LocalPlayer.Character:FindFirstChild("Humanoid") and LocalPlayer.Character.Humanoid.Health > 0 then
-                                            local obj = {UserInputState = Enum.UserInputState.Begin, UserInputType = Enum.UserInputType.MouseButton1, Position = Vector3.zero}
-                                            task.spawn(PL.Shoot, obj)
-                                            obj.UserInputState = Enum.UserInputState.End
-                                        end
-                                    end
-                                end
-                                task.wait(0.05)
-                            end
-                        end)
                     end
                 })
 
@@ -829,6 +829,10 @@ do
                     Max = 100,
                     Default = SilentAimState.HitChance,
                     Suffix = "%",
+                    ToolTip = {
+                        Name = "Hit Chance",
+                        Description = "Legit only. Chance silent aim redirects the bullet. Below 100% some shots fire normally and can miss."
+                    },
                     Callback = function(v) SilentAimState.HitChance = v end
                 })
 
@@ -839,6 +843,10 @@ do
                     Max = 100,
                     Default = SilentAimState.HeadshotChance,
                     Suffix = "%",
+                    ToolTip = {
+                        Name = "Headshot Chance",
+                        Description = "Legit only. Chance to aim at Head instead of torso when a shot is redirected."
+                    },
                     Callback = function(v) SilentAimState.HeadshotChance = v end
                 })
 
@@ -985,7 +993,8 @@ do
                         if SilentAimState.Enabled or RagebotForcedTarget then
                             local head = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
                             local previewOrigin = RagebotMuzzleOrigin or (head and head.Position) or Vector3.zero
-                            previewTarget = RagebotForcedTarget or saGetTarget(previewOrigin, 1000, true, false)
+                            local previewRoll = SilentAimState.Style == "Legit" and not RagebotForcedTarget
+                            previewTarget = RagebotForcedTarget or saGetTarget(previewOrigin, 1000, true, previewRoll)
                         end
 
                         if SilentAimState.Enabled and SilentAimState.Tracer and previewTarget then
@@ -1015,7 +1024,6 @@ do
 
                     RegisterCleanup(function()
                         PL.removeBulletHandler("SilentAim")
-                        if saAutofireThread then task.cancel(saAutofireThread) end
                     end)
                 end
             end
@@ -1023,7 +1031,6 @@ do
     end
 
     do
-        local HitSoundsSubPage = CombatPage:SubPage({Name = "Hit Sounds", Columns = 2})
 
         do
             local SoundFiles = {
@@ -1216,7 +1223,7 @@ do
                 if LocalPlayer.Character then RestoreAllSounds(LocalPlayer.Character) end
             end)
 
-            local HitSoundsSection = HitSoundsSubPage:Section({Name = "Hit Sounds", Side = 1}) do
+            local HitSoundsSection = CombatPage:Section({Name = "Hit Sounds", Side = 2}) do
                 HitSoundsSection:Toggle({
                     Name = "Enabled",
                     ToolTip = {
@@ -1281,7 +1288,7 @@ do
                 end)
             end
 
-            local KillSoundsSection = HitSoundsSubPage:Section({Name = "Kill Sounds", Side = 2}) do
+            local KillSoundsSection = CombatPage:Section({Name = "Kill Sounds", Side = 2}) do
                 KillSoundsSection:Toggle({
                     Name = "Enabled",
                     ToolTip = {
@@ -1320,10 +1327,8 @@ do
     end
 
     do
-        local UtilitySubPage = CombatPage:SubPage({Name = "Utility", Columns = 2})
-
         do
-            local AutoDetonateSection = UtilitySubPage:Section({Name = "Auto Detonate", Side = 1})
+            local AutoDetonateSection = CombatPage:Section({Name = "Auto Detonate", Side = 2})
             local ADEnabled = false
             local localC4 = nil
             local detonateTicks = 0
@@ -1391,7 +1396,7 @@ do
         end
 
         do
-            local AutoHealSection = UtilitySubPage:Section({Name = "Auto Heal", Side = 2})
+            local AutoHealSection = CombatPage:Section({Name = "Auto Heal", Side = 2})
             local AHEnabled = false
             local healItems = {Breakfast = true, Lunch = true, Dinner = true}
 
@@ -1430,7 +1435,7 @@ do
         end
 
         do
-            local AutoReloadSection = UtilitySubPage:Section({Name = "Auto Reload", Side = 1})
+            local AutoReloadSection = CombatPage:Section({Name = "Auto Reload", Side = 2})
             local AREnabled, ARHotSwap = false, false
             local weaponPriority = {["M4A1"] = 1, ["AK-47"] = 1, MP5 = 1, FAL = 1, ["Remington 870"] = 2, M9 = 3, Revolver = 4}
 
@@ -1451,8 +1456,8 @@ do
             end
 
             local function shootReloadHandler()
-                if not AREnabled or not PL.Shoot then return end
-                local tool = debug.getupvalue(PL.Shoot, 1)
+                if not AREnabled or not PL.rawShoot then return end
+                local tool = PL.getEquippedTool()
                 if tool and (tool:GetAttribute("Local_CurrentAmmo") or 1) <= 0 then
                     if PL.Reload then task.spawn(PL.Reload) end
                     if ARHotSwap then
@@ -1482,6 +1487,64 @@ do
                 Callback = function(v) ARHotSwap = v end
             })
             RegisterCleanup(function() PL.removeShootHandler("AutoReload") end)
+        end
+
+        do
+            local VehicleWallbangSection = CombatPage:Section({Name = "Vehicle Wallbang", Side = 2})
+            local vehicleWallbangModified = {}
+
+            local function ModifyVehiclePart(part)
+                if part:IsA("BasePart") then
+                    if not vehicleWallbangModified[part] then
+                        vehicleWallbangModified[part] = part.CanQuery
+                    end
+                    part.CanQuery = false
+                end
+            end
+
+            local carContainer = workspace:FindFirstChild("CarContainer")
+            if carContainer then
+                local VehicleWallbangEnabled
+
+                local function SetVehicleWallbang(enabled)
+                    if enabled then
+                        task.defer(function()
+                            if VehicleWallbangEnabled:Get() ~= true then return end
+                            for _, part in carContainer:GetDescendants() do
+                                ModifyVehiclePart(part)
+                            end
+                        end)
+                    else
+                        for part, original in pairs(vehicleWallbangModified) do
+                            if part.Parent then
+                                part.CanQuery = original
+                            end
+                        end
+                        table.clear(vehicleWallbangModified)
+                    end
+                end
+
+                VehicleWallbangEnabled = VehicleWallbangSection:Toggle({
+                    Name = "Enabled",
+                    ToolTip = {
+                        Name = "Vehicle Wallbang",
+                        Description = "Disables CanQuery on vehicle parts so bullets can pass through cars"
+                    },
+                    Flag = "VehicleWallbangEnabled",
+                    Default = false,
+                    Callback = SetVehicleWallbang,
+                })
+
+                TrackConnection(carContainer.DescendantAdded:Connect(function(part)
+                    if VehicleWallbangEnabled:Get() == true then
+                        ModifyVehiclePart(part)
+                    end
+                end))
+
+                RegisterCleanup(function()
+                    SetVehicleWallbang(false)
+                end)
+            end
         end
     end
 
@@ -1589,10 +1652,123 @@ do
             end
         end
     end
+
+    do
+        local VFState = {Enabled = false, Mode = "CFrame", Speed = 60}
+        local vfUp, vfDown = 0, 0
+        local vfWheels = {}
+        local vfPart
+        local VehicleFlySection = MovementPage:Section({Name = "Vehicle Fly", Side = 1})
+        local carContainer = workspace:WaitForChild("CarContainer", 30)
+
+        VehicleFlySection:Toggle({
+            Name = "Enabled",
+            Flag = "VehicleFlyEnabled",
+            Default = false,
+            Callback = function(v)
+                VFState.Enabled = v
+                vfUp, vfDown = 0, 0
+            end
+        })
+        VehicleFlySection:Dropdown({
+            Name = "Mode", Flag = "VehicleFlyMode", Default = "CFrame", Multi = false,
+            Items = {"CFrame", "Part"}, Callback = function(v) VFState.Mode = v end
+        })
+        VehicleFlySection:Slider({
+            Name = "Speed", Flag = "VehicleFlySpeed", Min = 1, Max = 100, Default = 60,
+            Callback = function(v) VFState.Speed = v end
+        })
+
+        TrackConnection(UserInputService.InputBegan:Connect(function(input)
+            if not VFState.Enabled or UserInputService:GetFocusedTextBox() then return end
+            if input.KeyCode == Enum.KeyCode.E then vfUp = 1
+            elseif input.KeyCode == Enum.KeyCode.Q then vfDown = -1 end
+        end))
+        TrackConnection(UserInputService.InputEnded:Connect(function(input)
+            if input.KeyCode == Enum.KeyCode.E and vfUp == 1 then vfUp = 0
+            elseif input.KeyCode == Enum.KeyCode.Q and vfDown == -1 then vfDown = 0 end
+        end))
+
+        NewRender(function(dt)
+            if not VFState.Enabled or not LocalPlayer.Character then
+                for _, w in vfWheels do pcall(function() w.Enabled = true end) end
+                table.clear(vfWheels)
+                if vfPart then vfPart.Parent = nil end
+                return
+            end
+            local hum = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+            local seat = hum and hum.SeatPart
+            local root = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+            if not (seat and root and carContainer and seat:IsDescendantOf(carContainer)) then
+                if vfPart then vfPart.Parent = nil end
+                return
+            end
+            if VFState.Mode == "Part" then
+                if not vfPart then
+                    vfPart = Instance.new("Part")
+                    vfPart.Size = Vector3.new(50, 1, 50)
+                    vfPart.Anchored, vfPart.CanQuery, vfPart.Transparency = true, false, 1
+                end
+                vfPart.CFrame = CFrame.new(seat.Position - Vector3.new(0, 2.2 - (vfUp + vfDown), 0))
+                vfPart.Parent = workspace
+            elseif seat:IsA("VehicleSeat") then
+                local wheels = seat.Parent and seat.Parent.Parent and seat.Parent.Parent:FindFirstChild("Wheels")
+                if wheels and #vfWheels == 0 then
+                    for _, w in wheels:GetDescendants() do
+                        if w.ClassName == "Rotate" or w:IsA("HingeConstraint") then
+                            w.Enabled = false
+                            table.insert(vfWheels, w)
+                        end
+                    end
+                end
+                root.AssemblyLinearVelocity = Vector3.new(0, 2.25, 0)
+                root.CFrame = CFrame.lookAlong(root.Position, PLCamera.CFrame.LookVector)
+                    + (hum.MoveDirection + Vector3.new(0, vfUp + vfDown, 0)) * VFState.Speed * dt
+            end
+        end)
+        RegisterCleanup(function()
+            for _, w in vfWheels do pcall(function() w.Enabled = true end) end
+            if vfPart then vfPart:Destroy() end
+        end)
+    end
+
+    do
+        local VSState = {Enabled = false, Speed = 140}
+        local vsSeats, vsOldSeat = {}, nil
+        local VehicleSpeedSection = MovementPage:Section({Name = "Vehicle Speed", Side = 2})
+        VehicleSpeedSection:Toggle({
+            Name = "Enabled", Flag = "VehicleSpeedEnabled", Default = false,
+            Callback = function(v) VSState.Enabled = v if not v then table.clear(vsSeats) vsOldSeat = nil end end
+        })
+        VehicleSpeedSection:Slider({
+            Name = "Speed", Flag = "VehicleSpeedValue", Min = 80, Max = 200, Default = 140,
+            Callback = function(v) VSState.Speed = v end
+        })
+        local carContainerVS = workspace:FindFirstChild("CarContainer")
+        task.spawn(function()
+            while true do
+                if VSState.Enabled and carContainerVS and LocalPlayer.Character then
+                    local seat = LocalPlayer.Character:FindFirstChildOfClass("Humanoid") and LocalPlayer.Character.Humanoid.SeatPart
+                    if seat and seat:IsDescendantOf(carContainerVS) then
+                        if seat ~= vsOldSeat then
+                            vsSeats = {}
+                            local model = seat.Parent and seat.Parent.Parent
+                            if model then
+                                for _, v in model:GetDescendants() do
+                                    if v:IsA("VehicleSeat") then table.insert(vsSeats, v) end
+                                end
+                            end
+                            vsOldSeat = seat
+                        end
+                        for _, v in vsSeats do v.MaxSpeed = VSState.Speed v.Torque = 4 end
+                    end
+                end
+                task.wait()
+            end
+        end)
+    end
     
     do
-        local ESPSubPage = VisualsPage:SubPage({Name = "ESP", Columns = 2})
-
         do
             local ESPFilterState = {
                 Teams = {},
@@ -1699,7 +1875,7 @@ do
                 return prefix .. username
             end
 
-            local ESPFilters = ESPSubPage:Section({Name = "Filters", Side = 1}) do
+            local ESPFilters = VisualsPage:Section({Name = "Filters", Side = 1}) do
                 ESPFilters:Dropdown({
                     Name = "Teams",
                     Flag = "ESPFilterTeams",
@@ -1810,7 +1986,7 @@ do
             ChamsFolder.Name = "catnipChams"
             ChamsFolder.Parent = game:GetService("CoreGui")
 
-            local ESPSection = ESPSubPage:Section({Name = "ESP", Side = 2}) do
+            local ESPSection = VisualsPage:Section({Name = "ESP", Side = 2}) do
                 ESPSection:Toggle({
                     Name = "Enabled",
                     ToolTip = { Name = "ESP", Description = "Master toggle for all ESP components (name, box, skeleton, chams, health bar)" },
@@ -2168,7 +2344,7 @@ do
                 end
             end
 
-            local ItemESPSection = ESPSubPage:Section({Name = "Item ESP", Side = 2}) do
+            local ItemESPSection = VisualsPage:Section({Name = "Item ESP", Side = 2}) do
                 ItemESPSection:Toggle({
                     Name = "Enabled",
                     ToolTip = {
@@ -2325,7 +2501,7 @@ do
         end
 
         do
-            local C4ESPSection = ESPSubPage:Section({Name = "C4 ESP", Side = 2})
+            local C4ESPSection = VisualsPage:Section({Name = "C4 ESP", Side = 2})
             local c4Refs, c4Folder = {}, Instance.new("Folder")
             c4Folder.Name = "catnipC4ESP"
             c4Folder.Parent = game:GetService("CoreGui")
@@ -2377,38 +2553,13 @@ do
     end
 
     do
-        local EffectsSubPage = VisualsPage:SubPage({Name = "Effects", Columns = 2})
-        local vmTool, vmHandle, vmOldTool
-        local vmMove = Vector3.zero
-
-        local vmGui = Instance.new("ScreenGui")
-        vmGui.Name = "catnipViewmodel"
-        vmGui.ResetOnSpawn = false
-        vmGui.IgnoreGuiInset = true
-        vmGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-        vmGui.Enabled = false
-        vmGui.Parent = (gethui and gethui()) or game:GetService("CoreGui")
-
-        local viewport = Instance.new("ViewportFrame")
-        viewport.Name = "Viewmodel"
-        viewport.Size = UDim2.fromScale(1, 1)
-        viewport.BackgroundTransparency = 1
-        viewport.LightColor = Color3.new(1, 1, 1)
-        viewport.Ambient = Color3.new(0.5, 0.5, 0.5)
-        viewport.Parent = vmGui
-
-        local worldModel = Instance.new("WorldModel")
-        worldModel.Parent = viewport
-
-        local vmCam = Instance.new("Camera")
-        vmCam.FieldOfView = 70
-        vmCam.Parent = viewport
-        viewport.CurrentCamera = vmCam
-
-        do
-            local BTState = {Enabled = false, Fade = true, Drawing = false, Lifetime = 0.2, Material = "Neon", Color = Color3.fromRGB(255, 200, 50), Opacity = 0.5}
+        local BTState = {Enabled = false, Fade = true, Drawing = false, Lifetime = 0.2, Thickness = 2, Material = "Neon", Color = Color3.fromRGB(255, 200, 50), Opacity = 0.5}
             local btDrawings = {}
-            local btSection = EffectsSubPage:Section({Name = "Bullet Tracers", Side = 1})
+            local btMaterials = {}
+            for _, mat in Enum.Material:GetEnumItems() do
+                table.insert(btMaterials, mat.Name)
+            end
+            local btSection = VisualsPage:Section({Name = "Bullet Tracers", Side = 1})
 
             btSection:Toggle({Name = "Enabled", Flag = "BulletTracersEnabled", Default = false, Callback = function(v)
                 BTState.Enabled = v
@@ -2418,8 +2569,9 @@ do
                         local velocity = CFrame.lookAt(origin, dir).LookVector * 1000
                         if BTState.Drawing then
                             local obj = TrackDrawing(Drawing.new("Line"))
-                            obj.Thickness = 2
+                            obj.Thickness = BTState.Thickness
                             obj.Color = BTState.Color
+                            obj.Transparency = 1 - BTState.Opacity
                             btDrawings[obj] = {origin, origin + velocity, os.clock()}
                             task.delay(BTState.Lifetime, function()
                                 btDrawings[obj] = nil
@@ -2427,7 +2579,8 @@ do
                             end)
                         else
                             local obj = Instance.new("Part")
-                            obj.Size = Vector3.new(0.1, 0.1, velocity.Magnitude)
+                            local thick = math.max(0.05, BTState.Thickness * 0.05)
+                            obj.Size = Vector3.new(thick, thick, velocity.Magnitude)
                             obj.CFrame = CFrame.lookAt(origin + velocity / 2, origin + velocity)
                             obj.CanCollide, obj.CanQuery, obj.Anchored = false, false, true
                             obj.Material = Enum.Material[BTState.Material] or Enum.Material.Neon
@@ -2446,7 +2599,9 @@ do
                 end
             end})
             btSection:Dropdown({Name = "Material", Flag = "BulletTracersMaterial", Default = "Neon", Multi = false,
-                Items = {"Plastic", "Neon", "Metal", "Glass", "SmoothPlastic"}, Callback = function(v) BTState.Material = v end})
+                Items = btMaterials, Callback = function(v) BTState.Material = v end})
+            btSection:Slider({Name = "Thickness", Flag = "BulletTracersThickness", Min = 1, Max = 8, Default = 2, Decimals = 1, Callback = function(v) BTState.Thickness = v end})
+            btSection:Slider({Name = "Opacity", Flag = "BulletTracersOpacity", Min = 0, Max = 1, Default = 0.5, Decimals = 0.01, Callback = function(v) BTState.Opacity = v end})
             btSection:Toggle({Name = "Fade", Flag = "BulletTracersFade", Default = true, Callback = function(v) BTState.Fade = v end})
             btSection:Toggle({Name = "Drawing", Flag = "BulletTracersDrawing", Default = false, Callback = function(v) BTState.Drawing = v end})
             btSection:Slider({Name = "Lifetime", Flag = "BulletTracersLifetime", Min = 0.05, Max = 0.5, Default = 0.2, Decimals = 0.01, Suffix = "s", Callback = function(v) BTState.Lifetime = v end})
@@ -2463,116 +2618,156 @@ do
                         obj.From = Vector2.new(from.X, from.Y)
                         obj.To = Vector2.new(to.X, to.Y)
                         if BTState.Fade then
-                            obj.Transparency = BTState.Opacity * (1 - math.clamp((os.clock() - data[3]) / BTState.Lifetime, 0, 1))
+                            local t = math.clamp((os.clock() - data[3]) / BTState.Lifetime, 0, 1)
+                            obj.Transparency = (1 - BTState.Opacity) + BTState.Opacity * t
+                        else
+                            obj.Transparency = 1 - BTState.Opacity
                         end
                     else
                         obj.Visible = false
                     end
                 end
             end)
+    end
+
+    do
+        local vmTool, vmHandle, vmOldTool
+        local vmAimLook = Vector3.new(0, 0, -1)
+        local VMEnabled, VMSway, VMForceField = false, true, false
+        local VMColor = Color3.fromRGB(0, 200, 255)
+        local vmSection = VisualsPage:Section({Name = "Viewmodel", Side = 2})
+
+        local function styleVmParts()
+            if not vmTool then return end
+            for _, v in vmTool:GetDescendants() do
+                if v:IsA("BasePart") then
+                    if VMForceField then
+                        v.Material = Enum.Material.ForceField
+                        v.Color = VMColor
+                    end
+                end
+            end
         end
 
-        do
-            local VMEnabled, VMSway, VMForceField = false, true, false
-            local VMColor = Color3.fromRGB(0, 200, 255)
-            local vmSection = EffectsSubPage:Section({Name = "Viewmodel", Side = 2})
-
-            local function restoreVmTool()
-                vmGui.Enabled = false
-                if vmOldTool then
-                    for _, v in vmOldTool:GetDescendants() do
-                        if v:IsA("BasePart") or v:IsA("Texture") or v:IsA("Decal") then
-                            v.LocalTransparencyModifier = 0
-                        end
-                    end
-                    vmOldTool = nil
-                end
-                if vmTool then vmTool:Destroy() vmTool, vmHandle = nil, nil end
-            end
-
-            local function onVmTool(tool)
-                if not VMEnabled or not tool or not tool:IsA("Tool") then return end
-                restoreVmTool()
-                vmOldTool = tool
-                vmTool = tool:Clone()
-                vmHandle = vmTool:FindFirstChild("Handle")
-                if not vmHandle then restoreVmTool() return end
-                for _, v in vmTool:GetDescendants() do
-                    if v:IsA("Script") or v:IsA("LocalScript") then v:Destroy() end
-                end
-                for _, v in vmTool:GetDescendants() do
-                    if v:IsA("BasePart") then
-                        v.Anchored = true
-                        v.CanCollide = false
-                        v.CanQuery = false
-                        if VMForceField then v.Material = Enum.Material.ForceField v.Color = VMColor end
-                    end
-                end
-                vmTool.Parent = worldModel
+        local function restoreVmTool()
+            if vmOldTool then
                 for _, v in vmOldTool:GetDescendants() do
-                    if v:IsA("BasePart") or v:IsA("Texture") or v:IsA("Decal") then v.LocalTransparencyModifier = 1 end
+                    if v:IsA("BasePart") or v:IsA("Texture") or v:IsA("Decal") then
+                        v.LocalTransparencyModifier = 0
+                    end
                 end
-                vmGui.Enabled = true
+                vmOldTool = nil
             end
+            if vmTool then
+                vmTool:Destroy()
+                vmTool, vmHandle = nil, nil
+            end
+        end
 
-            vmSection:Toggle({Name = "Enabled", Flag = "ViewmodelEnabled", Default = false, Callback = function(v)
+        local function onVmTool(tool)
+            if not VMEnabled or not tool or not tool:IsA("Tool") then return end
+            restoreVmTool()
+            vmOldTool = tool
+            vmTool = tool:Clone()
+            vmHandle = vmTool:FindFirstChild("Handle")
+            if not vmHandle then
+                restoreVmTool()
+                return
+            end
+            for _, v in vmTool:GetDescendants() do
+                if v:IsA("Script") or v:IsA("LocalScript") then
+                    v:Destroy()
+                end
+            end
+            styleVmParts()
+            vmTool.Parent = workspace.CurrentCamera
+            for _, v in vmOldTool:GetDescendants() do
+                if v:IsA("BasePart") or v:IsA("Texture") or v:IsA("Decal") then
+                    v.LocalTransparencyModifier = 1
+                end
+            end
+            vmAimLook = workspace.CurrentCamera.CFrame.LookVector
+        end
+
+        local function refreshVmTool()
+            if not VMEnabled or not vmOldTool or not vmOldTool.Parent then return end
+            onVmTool(vmOldTool)
+        end
+
+        vmSection:Toggle({
+            Name = "Enabled",
+            Flag = "ViewmodelEnabled",
+            Default = false,
+            Callback = function(v)
                 VMEnabled = v
-                if not v then restoreVmTool()
+                if not v then
+                    restoreVmTool()
                 else
                     local char = LocalPlayer.Character
                     local t = char and char:FindFirstChildWhichIsA("Tool")
                     if t then onVmTool(t) end
                 end
-            end})
-            vmSection:Toggle({Name = "Sway", Flag = "ViewmodelSway", Default = true, Callback = function(v) VMSway = v end})
-            vmSection:Toggle({Name = "ForceField", Flag = "ViewmodelForceField", Default = false, Callback = function(v) VMForceField = v end})
-            vmSection:Toggle({Name = "Tint", Flag = "ViewmodelUseColor", Default = true}):Colorpicker({
-                Name = "Color", Flag = "ViewmodelColor", Default = VMColor, Callback = function(v) VMColor = v end
-            })
+            end
+        })
+        vmSection:Toggle({Name = "Sway", Flag = "ViewmodelSway", Default = true, Callback = function(v) VMSway = v end})
+        vmSection:Toggle({
+            Name = "ForceField",
+            Flag = "ViewmodelForceField",
+            Default = false,
+            Callback = function(v)
+                VMForceField = v
+                refreshVmTool()
+            end
+        })
+        vmSection:Toggle({Name = "Tint", Flag = "ViewmodelUseColor", Default = true}):Colorpicker({
+            Name = "Color",
+            Flag = "ViewmodelColor",
+            Default = VMColor,
+            Callback = function(v)
+                VMColor = v
+                styleVmParts()
+            end
+        })
 
-            TrackConnection(LocalPlayer.CharacterAdded:Connect(function(char)
-                restoreVmTool()
-                TrackConnection(char.ChildAdded:Connect(function(c) if c:IsA("Tool") then onVmTool(c) end end))
-                TrackConnection(char.ChildRemoved:Connect(function(c) if c == vmOldTool then restoreVmTool() end end))
-                local t = char:FindFirstChildWhichIsA("Tool")
-                if t then onVmTool(t) end
+        TrackConnection(LocalPlayer.CharacterAdded:Connect(function(char)
+            restoreVmTool()
+            TrackConnection(char.ChildAdded:Connect(function(c)
+                if c:IsA("Tool") then onVmTool(c) end
             end))
+            TrackConnection(char.ChildRemoved:Connect(function(c)
+                if c == vmOldTool then restoreVmTool() end
+            end))
+            local t = char:FindFirstChildWhichIsA("Tool")
+            if t then onVmTool(t) end
+        end))
 
-            NewRender(function()
-                if not VMEnabled or not vmHandle or not vmTool then return end
-                PLCamera = workspace.CurrentCamera
-                vmCam.CFrame = PLCamera.CFrame
-                vmCam.FieldOfView = PLCamera.FieldOfView
+        NewRender(function(dt)
+            if not VMEnabled or not vmHandle then return end
+            local cam = workspace.CurrentCamera
+            PLCamera = cam
 
-                local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-                if root then
-                    vmMove = root.AssemblyLinearVelocity * 0.005
-                else
-                    vmMove = Vector3.zero
-                end
+            local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+            local vmMove = root and root.AssemblyLinearVelocity * 0.005 or Vector3.zero
+            if vmMove.Magnitude > 0.1 and VMSway then
+                vmMove = vmMove + (cam.CFrame * CFrame.new(math.sin(os.clock() * 10) * 0.06, 0, 0)).Position - cam.CFrame.Position
+            end
 
-                local look = PLCamera.CFrame.LookVector
-                if aimTimer > os.clock() then
-                    look = (aimVec - PLCamera.CFrame.Position).Unit
-                end
-                if VMSway then
-                    look = (look + PLCamera.CFrame.RightVector * math.sin(os.clock() * 10) * 0.06).Unit
-                end
+            local cf = (cam.CFrame * CFrame.new(2, -1.5, -3)) + vmMove
+            local targetLook = cam.CFrame.LookVector
+            if aimTimer > os.clock() then
+                targetLook = CFrame.lookAt(cf.Position, aimVec).LookVector
+            end
+            vmAimLook = vmAimLook:Lerp(targetLook, math.min(1, 15 * dt)).Unit
 
-                local recoil = math.max(shootTimer - os.clock(), 0)
-                local cf = (PLCamera.CFrame * CFrame.new(2, -1.5, -3 - recoil)) + vmMove
-                -- World-space CFrames inside ViewportFrame WorldModel: renders on HUD only, no world wall clip
-                vmHandle.CFrame = CFrame.lookAlong(cf.Position, look)
-            end)
-            RegisterCleanup(function()
-                restoreVmTool()
-                vmGui:Destroy()
-            end)
-        end
+            local recoil = math.max(shootTimer - os.clock(), 0)
+            vmHandle.CFrame = CFrame.lookAlong(cf.Position, vmAimLook) * CFrame.new(0, 0, recoil)
+            vmHandle.AssemblyLinearVelocity = Vector3.zero
+        end)
+
+        RegisterCleanup(restoreVmTool)
     end
 
     do
-        local CharSubPage = VisualsPage:SubPage({Name = "Character", Columns = 2})
 
         local FFState = {
             Enabled = false,
@@ -2640,7 +2835,7 @@ do
             OriginalMaterials = {}
         end
 
-        local FFSection = CharSubPage:Section({Name = "ForceField Material", Side = 1}) do
+        local FFSection = VisualsPage:Section({Name = "ForceField Material", Side = 1}) do
             FFSection:Toggle({
                 Name = "Enabled",
                 ToolTip = { Name = "ForceField Material", Description = "Replaces your character/weapon materials with the ForceField shader" },
@@ -2718,12 +2913,11 @@ do
     end
 
     do
-        local ObjectsSubPage = WorldPage:SubPage({Name = "Objects", Columns = 2})
 
         local DoorStorage = game:GetService("Lighting")
         local StorageName = "catnipDoorStorage"
 
-        local RemoveDoors = ObjectsSubPage:Section({Name = "Remove Doors", Side = 1}) do
+        local RemoveDoors = WorldPage:Section({Name = "Remove Doors", Side = 1}) do
             RemoveDoors:Toggle({
                 Name = "Enabled",
                 ToolTip = {
@@ -2760,7 +2954,7 @@ do
             end
         end)
 
-        local BypassDoors = ObjectsSubPage:Section({Name = "Bypass Doors", Side = 1}) do
+        local BypassDoors = WorldPage:Section({Name = "Bypass Doors", Side = 1}) do
             local DummyFolder = nil
 
             BypassDoors:Toggle({
@@ -2833,7 +3027,6 @@ do
     end
 
     do
-        local LightingSubPage = WorldPage:SubPage({Name = "Lighting", Columns = 2})
         local Lighting = game:GetService("Lighting")
 
         local OriginalLighting = {
@@ -2911,7 +3104,7 @@ do
             ColorShiftBottom = OriginalLighting.ColorShift_Bottom,
         }
 
-        local AmbientSection = LightingSubPage:Section({Name = "Ambient & Brightness", Side = 1}) do
+        local AmbientSection = WorldPage:Section({Name = "Ambient & Brightness", Side = 1}) do
             AmbientSection:Toggle({
                 Name = "Override Ambient",
                 ToolTip = { Name = "Override Ambient", Description = "Override the indoor ambient lighting color" },
@@ -2967,7 +3160,7 @@ do
             })
         end
 
-        local TimeSection = LightingSubPage:Section({Name = "Time of Day", Side = 1}) do
+        local TimeSection = WorldPage:Section({Name = "Time of Day", Side = 1}) do
             TimeSection:Toggle({
                 Name = "Override Clock Time",
                 ToolTip = { Name = "Override Clock Time", Description = "Freeze the in-game time to a custom value" },
@@ -2988,7 +3181,7 @@ do
             })
         end
 
-        local FogSection = LightingSubPage:Section({Name = "Fog", Side = 2}) do
+        local FogSection = WorldPage:Section({Name = "Fog", Side = 2}) do
             FogSection:Toggle({
                 Name = "Override Fog",
                 ToolTip = { Name = "Override Fog", Description = "Override fog distance and color" },
@@ -3095,7 +3288,7 @@ do
 
         table.insert(SkyboxNames, "Custom")
 
-        local SkySection = LightingSubPage:Section({Name = "Sky & Color Shift", Side = 2}) do
+        local SkySection = WorldPage:Section({Name = "Sky & Color Shift", Side = 2}) do
             SkySection:Dropdown({
                 Name = "Skybox",
                 ToolTip = { Name = "Custom Skybox", Description = "Pick a preset, or select 'Custom' and enter your own asset IDs below" },
@@ -3311,7 +3504,7 @@ do
     end
 
     do
-        local AutoBLSection = MiscPage:Section({Name = "Auto Blacklist", Side = 2}) do
+        local AutoBLSection = CombatPage:Section({Name = "Auto Blacklist", Side = 2}) do
             local AutoBLState = { Enabled = false }
 
             local function ExtractKillerUsername(entryText)
@@ -3381,7 +3574,7 @@ do
     end
 
     do
-        local MonoAudio = MiscPage:Section({Name = "Center Gun Audio", Side = 1}) do
+        local MonoAudio = CombatPage:Section({Name = "Center Gun Audio", Side = 2}) do
             local MonoState = { Enabled = false }
             local ReparentedSounds = {}
 
@@ -3446,7 +3639,7 @@ do
     end
 
     do
-        local RemoveJumpCooldown = MiscPage:Section({Name = "Remove Jump Cooldown", Side = 1}) do
+        local RemoveJumpCooldown = MovementPage:Section({Name = "Remove Jump Cooldown", Side = 2}) do
             local NJCEnabled = false
             local jumpConnDisabled = nil
             local function onCharacterAdded(character)
@@ -3486,7 +3679,7 @@ do
     end
 
     do
-        local AntiInvisible = MiscPage:Section({Name = "Anti Invisible", Side = 2}) do
+        local AntiInvisible = CombatPage:Section({Name = "Anti Invisible", Side = 2}) do
             local AIEnabled = false
             local invisAnimId = "215384594"
             local tracked = {}
@@ -3568,7 +3761,7 @@ do
     end
 
     do
-        local AntiTase = MiscPage:Section({Name = "Anti Tase", Side = 2}) do
+        local AntiTase = CombatPage:Section({Name = "Anti Tase", Side = 2}) do
             local ATEnabled = false
             local taseOldFn, taseConn = nil, nil
             local PlayerTased = ReplicatedStorage:WaitForChild("GunRemotes"):WaitForChild("PlayerTased")
@@ -4063,7 +4256,7 @@ do
     end
 
     do
-        local FistAura = MiscPage:Section({Name = "Fist Aura", Side = 2}) do
+        local FistAura = CombatPage:Section({Name = "Fist Aura", Side = 2}) do
             local Players = game:GetService("Players")
             local LocalPlayer = Players.LocalPlayer
             local MeleeRemote = game:GetService("ReplicatedStorage"):WaitForChild("meleeEvent")
@@ -4371,7 +4564,7 @@ do
     end
 
     do
-        local AntiKillPlaneSection = BlatantPage:Section({Name = "Anti Kill Plane", Side = 1})
+        local AntiKillPlaneSection = WorldPage:Section({Name = "Anti Kill Plane", Side = 2})
         local killPlaneParts = {}
         AntiKillPlaneSection:Toggle({
             Name = "Enabled",
@@ -4405,7 +4598,7 @@ do
     end
 
     do
-        local AutoResetSection = BlatantPage:Section({Name = "Auto Reset", Side = 2})
+        local AutoResetSection = MiscPage:Section({Name = "Auto Reset", Side = 2})
         local criminalsTeam = Teams:FindFirstChild("Criminals")
         local autoResetConn
         AutoResetSection:Toggle({
@@ -4428,181 +4621,8 @@ do
     end
 
     do
-        local VFState = {Enabled = false, Mode = "CFrame", Speed = 60}
-        local vfUp, vfDown = 0, 0
-        local vfWheels = {}
-        local vfPart
-        local VehicleFlySection = BlatantPage:Section({Name = "Vehicle Fly", Side = 1})
-        local carContainer = workspace:WaitForChild("CarContainer", 30)
-
-        VehicleFlySection:Toggle({
-            Name = "Enabled",
-            Flag = "VehicleFlyEnabled",
-            Default = false,
-            Callback = function(v)
-                VFState.Enabled = v
-                vfUp, vfDown = 0, 0
-            end
-        })
-        VehicleFlySection:Dropdown({
-            Name = "Mode", Flag = "VehicleFlyMode", Default = "CFrame", Multi = false,
-            Items = {"CFrame", "Part"}, Callback = function(v) VFState.Mode = v end
-        })
-        VehicleFlySection:Slider({
-            Name = "Speed", Flag = "VehicleFlySpeed", Min = 1, Max = 100, Default = 60,
-            Callback = function(v) VFState.Speed = v end
-        })
-
-        TrackConnection(UserInputService.InputBegan:Connect(function(input)
-            if not VFState.Enabled or UserInputService:GetFocusedTextBox() then return end
-            if input.KeyCode == Enum.KeyCode.E then vfUp = 1
-            elseif input.KeyCode == Enum.KeyCode.Q then vfDown = -1 end
-        end))
-        TrackConnection(UserInputService.InputEnded:Connect(function(input)
-            if input.KeyCode == Enum.KeyCode.E and vfUp == 1 then vfUp = 0
-            elseif input.KeyCode == Enum.KeyCode.Q and vfDown == -1 then vfDown = 0 end
-        end))
-
-        NewRender(function(dt)
-            if not VFState.Enabled or not LocalPlayer.Character then
-                for _, w in vfWheels do pcall(function() w.Enabled = true end) end
-                table.clear(vfWheels)
-                if vfPart then vfPart.Parent = nil end
-                return
-            end
-            local hum = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
-            local seat = hum and hum.SeatPart
-            local root = LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-            if not (seat and root and carContainer and seat:IsDescendantOf(carContainer)) then
-                if vfPart then vfPart.Parent = nil end
-                return
-            end
-            if VFState.Mode == "Part" then
-                if not vfPart then
-                    vfPart = Instance.new("Part")
-                    vfPart.Size = Vector3.new(50, 1, 50)
-                    vfPart.Anchored, vfPart.CanQuery, vfPart.Transparency = true, false, 1
-                end
-                vfPart.CFrame = CFrame.new(seat.Position - Vector3.new(0, 2.2 - (vfUp + vfDown), 0))
-                vfPart.Parent = workspace
-            elseif seat:IsA("VehicleSeat") then
-                local wheels = seat.Parent and seat.Parent.Parent and seat.Parent.Parent:FindFirstChild("Wheels")
-                if wheels and #vfWheels == 0 then
-                    for _, w in wheels:GetDescendants() do
-                        if w.ClassName == "Rotate" or w:IsA("HingeConstraint") then
-                            w.Enabled = false
-                            table.insert(vfWheels, w)
-                        end
-                    end
-                end
-                root.AssemblyLinearVelocity = Vector3.new(0, 2.25, 0)
-                root.CFrame = CFrame.lookAlong(root.Position, PLCamera.CFrame.LookVector)
-                    + (hum.MoveDirection + Vector3.new(0, vfUp + vfDown, 0)) * VFState.Speed * dt
-            end
-        end)
-        RegisterCleanup(function()
-            for _, w in vfWheels do pcall(function() w.Enabled = true end) end
-            if vfPart then vfPart:Destroy() end
-        end)
-    end
-
-    do
-        local VSState = {Enabled = false, Speed = 140}
-        local vsSeats, vsOldSeat = {}, nil
-        local VehicleSpeedSection = BlatantPage:Section({Name = "Vehicle Speed", Side = 2})
-        VehicleSpeedSection:Toggle({
-            Name = "Enabled", Flag = "VehicleSpeedEnabled", Default = false,
-            Callback = function(v) VSState.Enabled = v if not v then table.clear(vsSeats) vsOldSeat = nil end end
-        })
-        VehicleSpeedSection:Slider({
-            Name = "Speed", Flag = "VehicleSpeedValue", Min = 80, Max = 200, Default = 140,
-            Callback = function(v) VSState.Speed = v end
-        })
-        local carContainerVS = workspace:FindFirstChild("CarContainer")
-        task.spawn(function()
-            while true do
-                if VSState.Enabled and carContainerVS and LocalPlayer.Character then
-                    local seat = LocalPlayer.Character:FindFirstChildOfClass("Humanoid") and LocalPlayer.Character.Humanoid.SeatPart
-                    if seat and seat:IsDescendantOf(carContainerVS) then
-                        if seat ~= vsOldSeat then
-                            vsSeats = {}
-                            local model = seat.Parent and seat.Parent.Parent
-                            if model then
-                                for _, v in model:GetDescendants() do
-                                    if v:IsA("VehicleSeat") then table.insert(vsSeats, v) end
-                                end
-                            end
-                            vsOldSeat = seat
-                        end
-                        for _, v in vsSeats do v.MaxSpeed = VSState.Speed v.Torque = 4 end
-                    end
-                end
-                task.wait()
-            end
-        end)
-    end
-
-    do
-        local VehicleWallbangSection = BlatantPage:Section({Name = "Vehicle Wallbang", Side = 2})
-        local vehicleWallbangModified = {}
-
-        local function ModifyVehiclePart(part)
-            if part:IsA("BasePart") then
-                if not vehicleWallbangModified[part] then
-                    vehicleWallbangModified[part] = part.CanQuery
-                end
-                part.CanQuery = false
-            end
-        end
-
-        local carContainer = workspace:FindFirstChild("CarContainer")
-        if carContainer then
-            local VehicleWallbangEnabled
-
-            local function SetVehicleWallbang(enabled)
-                if enabled then
-                    task.defer(function()
-                        if VehicleWallbangEnabled:Get() ~= true then return end
-                        for _, part in carContainer:GetDescendants() do
-                            ModifyVehiclePart(part)
-                        end
-                    end)
-                else
-                    for part, original in pairs(vehicleWallbangModified) do
-                        if part.Parent then
-                            part.CanQuery = original
-                        end
-                    end
-                    table.clear(vehicleWallbangModified)
-                end
-            end
-
-            VehicleWallbangEnabled = VehicleWallbangSection:Toggle({
-                Name = "Enabled",
-                ToolTip = {
-                    Name = "Vehicle Wallbang",
-                    Description = "Disables CanQuery on vehicle parts so bullets can pass through cars"
-                },
-                Flag = "VehicleWallbangEnabled",
-                Default = false,
-                Callback = SetVehicleWallbang,
-            })
-
-            TrackConnection(carContainer.DescendantAdded:Connect(function(part)
-                if VehicleWallbangEnabled:Get() == true then
-                    ModifyVehiclePart(part)
-                end
-            end))
-
-            RegisterCleanup(function()
-                SetVehicleWallbang(false)
-            end)
-        end
-    end
-
-    do
-        local RagebotSection = BlatantPage:Section({Name = "Ragebot (BETA)", Side = 1})
-        local RagebotConfigSection = BlatantPage:Section({Name = "Ragebot Config", Side = 2})
+        local RagebotSection = RagebotPage:Section({Name = "Ragebot", Side = 1})
+        local RagebotConfigSection = RagebotPage:Section({Name = "Ragebot Config", Side = 2})
 
         local Players = game:GetService("Players")
         local LocalPlayer = Players.LocalPlayer
