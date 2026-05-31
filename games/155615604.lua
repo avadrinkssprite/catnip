@@ -343,15 +343,19 @@ do
         local root = localCharacter:FindFirstChild("HumanoidRootPart")
         if not root then return nil end
 
-        if settings.RollChance and settings.AimRandom and settings.AimRandom:NextNumber(0, 100) > (settings.HitChance or 100) then
-            return nil
+        if settings.RollChance and settings.HitChance and settings.HitChance < 100 and settings.AimRandom then
+            if settings.AimRandom:NextInteger(1, 100) > settings.HitChance then
+                return nil
+            end
         end
 
         local boneName = "HumanoidRootPart"
-        if settings.HeadshotChance and settings.AimRandom then
-            boneName = settings.AimRandom:NextNumber(0, 100) < settings.HeadshotChance and "Head" or "HumanoidRootPart"
-        elseif settings.Bone then
+        if settings.Bone then
             boneName = settings.Bone
+        elseif settings.HeadshotChance and settings.HeadshotChance >= 100 then
+            boneName = "Head"
+        elseif settings.HeadshotChance and settings.AimRandom then
+            boneName = settings.AimRandom:NextInteger(1, 100) <= settings.HeadshotChance and "Head" or "HumanoidRootPart"
         end
 
         local aimRange = settings.Range or 150
@@ -620,6 +624,7 @@ do
             local SilentAimSection = CombatPage:Section({Name = "Silent Aim", Side = 1}) do
                 local SilentAimState = {
                     Enabled = false,
+                    Style = "Legit",
                     Triggerbot = false,
                     ArrestSafety = false,
                     FoVCircle = false,
@@ -665,26 +670,37 @@ do
                 end
 
                 local function saGetTarget(origin, rangeLimit, attackCheck, rollChance)
+                    local blatant = SilentAimState.Style == "Blatant"
                     return PLTargeting.getClosestPart({
                         Origin = origin,
                         Mode = SilentAimState.Mode,
                         Range = SilentAimState.Range,
                         RangeLimit = rangeLimit,
-                        HitChance = SilentAimState.HitChance,
-                        HeadshotChance = SilentAimState.HeadshotChance,
+                        HitChance = blatant and 100 or SilentAimState.HitChance,
+                        HeadshotChance = blatant and 100 or SilentAimState.HeadshotChance,
+                        Bone = blatant and "Head" or nil,
                         Wallbang = SilentAimState.Wallbang,
                         AttackCheck = attackCheck,
-                        RollChance = rollChance,
+                        RollChance = rollChance and not blatant,
                         AimRandom = aimRandom,
                         Filters = getSAFilters(),
                     })
                 end
 
+                SilentAimSection:Dropdown({
+                    Name = "Style",
+                    Flag = "SilentAimStyle",
+                    Default = "Legit",
+                    Multi = false,
+                    Items = {"Legit", "Blatant"},
+                    Callback = function(v) SilentAimState.Style = v end
+                })
+
                 SilentAimSection:Toggle({
                     Name = "Enabled",
                     ToolTip = {
                         Name = "Silent Aim",
-                        Description = "Hooks Prison Life bullets toward the closest valid target (Vape-style)"
+                        Description = "Legit: hit/headshot chance rolls can miss (Vape). Blatant: always redirects to head."
                     },
                     Flag = "SilentAimEnabled",
                     Default = SilentAimState.Enabled,
@@ -813,6 +829,10 @@ do
                     Max = 100,
                     Default = SilentAimState.HitChance,
                     Suffix = "%",
+                    ToolTip = {
+                        Name = "Hit Chance",
+                        Description = "Legit only. Chance silent aim redirects the bullet. Below 100% some shots fire normally and can miss."
+                    },
                     Callback = function(v) SilentAimState.HitChance = v end
                 })
 
@@ -823,6 +843,10 @@ do
                     Max = 100,
                     Default = SilentAimState.HeadshotChance,
                     Suffix = "%",
+                    ToolTip = {
+                        Name = "Headshot Chance",
+                        Description = "Legit only. Chance to aim at Head instead of torso when a shot is redirected."
+                    },
                     Callback = function(v) SilentAimState.HeadshotChance = v end
                 })
 
@@ -969,7 +993,8 @@ do
                         if SilentAimState.Enabled or RagebotForcedTarget then
                             local head = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
                             local previewOrigin = RagebotMuzzleOrigin or (head and head.Position) or Vector3.zero
-                            previewTarget = RagebotForcedTarget or saGetTarget(previewOrigin, 1000, true, false)
+                            local previewRoll = SilentAimState.Style == "Legit" and not RagebotForcedTarget
+                            previewTarget = RagebotForcedTarget or saGetTarget(previewOrigin, 1000, true, previewRoll)
                         end
 
                         if SilentAimState.Enabled and SilentAimState.Tracer and previewTarget then
