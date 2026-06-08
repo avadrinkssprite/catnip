@@ -6,7 +6,7 @@
 
 a free and fully opensource script hub
 
-## [💬 discord](https://discord.gg/DPBtncwaEm)
+## [💬 discord](https://discord.gg/DPBtncwaEm) [📦 website](https://catthatdrinkssprite.github.io/catnip)
 
 ## 🎮 supported games
 | game name | place id | lines of code |
