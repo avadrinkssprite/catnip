@@ -1,5 +1,5 @@
 --Prison Life
-local Library = loadstring(game:HttpGet("https://github.com/catthatdrinkssprite/catnip/raw/main/library/Library.lua"))()
+local Library = loadstring(game:HttpGet("https://github.com/avadrinkssprite/catnip/raw/main/library/Library.lua"))()
 
 local Window = Library:Window({
     Logo = getcustomasset("catnip/images/paw.png"),

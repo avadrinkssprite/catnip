@@ -6,7 +6,7 @@
 
 a free and fully opensource script hub
 
-## [💬 discord](https://discord.gg/DPBtncwaEm) [📦 website](https://catthatdrinkssprite.github.io/catnip)
+## [💬 discord](https://discord.gg/DPBtncwaEm) [📦 website](https://avadrinkssprite.github.io/catnip)
 
 ## 🎮 supported games
 | game name | place id | lines of code |
@@ -25,7 +25,7 @@ a free and fully opensource script hub
 <summary>📦 script</summary>
 
 ```lua
-loadstring(game:HttpGet("https://github.com/catthatdrinkssprite/catnip/raw/main/loader.lua", true))()
+loadstring(game:HttpGet("https://github.com/avadrinkssprite/catnip/raw/main/loader.lua", true))()
 ```
 
 </details>
@@ -148,11 +148,11 @@ loadstring(game:HttpGet("https://github.com/catthatdrinkssprite/catnip/raw/main/
 
 ## 🛡️ license
 
-this project is licensed under the [gnu general public license v3.0 or later](https://github.com/catthatdrinkssprite/catnip/blob/main/LICENSE).
+this project is licensed under the [gnu general public license v3.0 or later](https://github.com/avadrinkssprite/catnip/blob/main/LICENSE).
 
 ## 📃 credits
 
-catthatdrinkssprite - script founder and lead developer
+Ava - script founder and lead developer
 
 azula.cs - active contributor
 

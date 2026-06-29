@@ -8,7 +8,7 @@ if QuartzOk and Quartz then
     Tester:PatchEnvironment()
 end
 
-local BASE_URL = "https://github.com/catthatdrinkssprite/catnip/raw/main"
+local BASE_URL = "https://github.com/avadrinkssprite/catnip/raw/main"
 
 local Folders = {
     "catnip",

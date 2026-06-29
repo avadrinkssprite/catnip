@@ -1,7 +1,7 @@
 --[[
     scoot ui library
     made by samet
-    edited a lil bit by catthatdrinkssprite and azula
+    edited a lil bit by avadrinkssprite and azula
 
     example/documentation is at the bottom
 ]]
@@ -81,10 +81,10 @@ local Library do
         },
 
         Images = {
-            ["Saturation"] = {"Saturation.png", "https://github.com/catthatdrinkssprite/catnip/blob/main/library/images/saturation.png?raw=true" },
-            ["Value"] = { "Value.png", "https://github.com/catthatdrinkssprite/catnip/blob/main/library/images/value.png?raw=true" },
-            ["Hue"] = { "Hue.png", "https://github.com/catthatdrinkssprite/catnip/blob/main/library/images/horizontalhue.png?raw=true" },
-            ["Checkers"] = { "Checkers.png", "https://github.com/catthatdrinkssprite/catnip/blob/main/library/images/checkers.png?raw=true" },
+            ["Saturation"] = {"Saturation.png", "https://github.com/avadrinkssprite/catnip/blob/main/library/images/saturation.png?raw=true" },
+            ["Value"] = { "Value.png", "https://github.com/avadrinkssprite/catnip/blob/main/library/images/value.png?raw=true" },
+            ["Hue"] = { "Hue.png", "https://github.com/avadrinkssprite/catnip/blob/main/library/images/horizontalhue.png?raw=true" },
+            ["Checkers"] = { "Checkers.png", "https://github.com/avadrinkssprite/catnip/blob/main/library/images/checkers.png?raw=true" },
         },
 
         -- Ignore below
@@ -769,7 +769,7 @@ local Library do
         end
 
         CustomFont:New("Monaco", 400, "Regular", {
-            Url = "https://github.com/catthatdrinkssprite/catnip/raw/refs/heads/main/library/fonts/Monaco.ttf"
+            Url = "https://github.com/avadrinkssprite/catnip/raw/refs/heads/main/library/fonts/Monaco.ttf"
         })
 
         Library.Font = CustomFont:Get("Monaco")
