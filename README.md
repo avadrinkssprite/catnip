@@ -1,3 +1,5 @@
+this is discontinued cuz i quit exploiting on roblox, okay BYE
+
 <div align='center'>
 
 ---
